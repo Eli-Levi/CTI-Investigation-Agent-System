@@ -1,0 +1,9 @@
+# live attacker indicators and raw evidence: never commit
+investigations/
+__pycache__/
+*.pyc
+*.tmp
+*.lock
+.claude/settings.local.json
+Investigation Records/
+.venv

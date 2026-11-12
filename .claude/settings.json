@@ -1,0 +1,28 @@
+{
+   "hooks":{
+      "PreToolUse":[
+         {
+            "matcher":"WebFetch|Bash|PowerShell|Write|Edit|MultiEdit",
+            "hooks":[
+               {
+                  "type":"command",
+                  "command":"python \"$CLAUDE_PROJECT_DIR/.claude/hooks/passive_guard.py\"",
+                  "timeout":10
+               }
+            ]
+         }
+      ]
+   },
+   "permissions":{
+      "allow":[
+         "Bash(python scripts/*)",
+         "PowerShell(python scripts/*)",
+         "WebFetch(domain:urlscan.io)",
+         "WebFetch(domain:www.virustotal.com)",
+         "WebFetch(domain:wheregoes.com)",
+         "WebFetch(domain:crt.sh)",
+         "WebFetch(domain:rdap.org)",
+         "WebFetch(domain:web.archive.org)"
+      ]
+   }
+}
