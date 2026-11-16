@@ -2,6 +2,8 @@
 
 The report is shareable: defang URLs and domains, cite E-ids instead of repeating raw values, and include no victim PII.
 
+**Header line** (both `report.md` and `report.he.md`): `**Case:** <CASE> · **Date:** <YYYY-MM-DD> · **Analyst:** Eli Levi · **Classification:** <TLP>`. The analyst is always the human owner, **Eli Levi** (Hebrew report: אלי לוי). Never write "CTI orchestrator", "Claude" or any agent name there.
+
 1. **Summary**: 3–5 lines covering what it is, who is impersonated, the targets, current status (live, down or unknown) and the overall confidence.
 2. **Attack chain**: delivery → shortener and redirects → landing → backend/exfil → hosting. Give one line per hop with E-ids, and map techniques to MITRE ATT&CK where they fit (e.g. T1566.002 Spearphishing Link, T1583.001 Acquire Domains, T1608.005 Link Target, T1056.003 Web Portal Capture).
 3. **Diagram**: embed the current `diagram.mmd` in a ```mermaid block, with the text legend line beneath it.

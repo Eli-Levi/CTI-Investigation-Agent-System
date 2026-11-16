@@ -46,6 +46,21 @@ def utc():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+LOG_DIR = os.environ.get("CTI_LOG_DIR") or os.path.join(ROOT, "logs")
+
+
+def tlog(stream, **fields):
+    """Best-effort telemetry: append one JSON line to logs/<stream>.jsonl. Never raises, never logs
+    URLs/queries/keys/bodies (callers pass host + metadata only). The logs dir is gitignored."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        rec = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"), **fields}
+        with open(os.path.join(LOG_DIR, stream + ".jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
