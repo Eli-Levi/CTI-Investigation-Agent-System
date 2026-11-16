@@ -3,15 +3,18 @@ import io, json, os, shutil, subprocess, sys, tempfile, unittest, contextlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+os.environ["CTI_LOG_DIR"] = tempfile.mkdtemp(prefix="cti-testlogs-")  # keep test runs out of the real logs/
 import ctilib, case, evidence_ingest, evidence_doc, intel, ioc_index  # noqa: E402
 
 HOOK = os.path.join(ROOT, ".claude", "hooks", "passive_guard.py")
+TELEMETRY = os.path.join(ROOT, ".claude", "hooks", "telemetry.py")
 CASE = "TEST-offline"
+TEST_LOGS = os.environ["CTI_LOG_DIR"]
 
 
 def hook(tool, ti, env=None):
     p = subprocess.run([sys.executable, HOOK], input=json.dumps({"tool_name": tool, "tool_input": ti}),
-                       capture_output=True, text=True, env={**os.environ, **(env or {})})
+                       capture_output=True, text=True, env={**os.environ, "CTI_LOG_DIR": TEST_LOGS, **(env or {})})
     return json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"] if p.stdout.strip() else "pass"
 
 
@@ -47,6 +50,49 @@ class Hook(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt", "DPAPI is Windows-only")
+class Telemetry(unittest.TestCase):
+    def run_hook(self, payload, d):
+        subprocess.run([sys.executable, TELEMETRY], input=json.dumps(payload), capture_output=True, text=True,
+                       env={**os.environ, "CTI_LOG_DIR": d}, check=True)
+
+    def rows(self, d, stream):
+        p = os.path.join(d, stream + ".jsonl")
+        if not os.path.exists(p):
+            return []
+        with open(p, encoding="utf-8") as fh:
+            return [json.loads(x) for x in fh]
+
+    def test_tool_logging_is_privacy_safe(self):
+        d = tempfile.mkdtemp()
+        self.run_hook({"hook_event_name": "PostToolUse", "session_id": "s", "tool_name": "PowerShell",
+                       "tool_input": {"command": "python scripts/intel.py CASE1 urlscan search evil-pay.xyz"},
+                       "tool_response": "x" * 50, "duration_ms": 12}, d)
+        self.run_hook({"hook_event_name": "PostToolUseFailure", "session_id": "s", "tool_name": "WebFetch",
+                       "tool_input": {"url": "https://pay-il.xyz/a?k=1"}, "error": "boom " + "A" * 40}, d)
+        t = self.rows(d, "tools")
+        self.assertEqual(t[0]["in"], {"kind": "script", "script": "intel.py", "args": ["CASE1", "urlscan", "search"]})
+        self.assertTrue(t[0]["ok"] and t[0]["result_chars"] == 50)
+        self.assertFalse(t[1]["ok"])
+        blob = json.dumps(self.rows(d, "tools") + self.rows(d, "errors"))
+        self.assertNotIn("evil-pay", blob)
+        self.assertNotIn("A" * 40, blob)
+        self.assertEqual(len(self.rows(d, "errors")), 1)
+
+    def test_transcript_usage_ingested_and_idempotent(self):
+        d = tempfile.mkdtemp()
+        tp = os.path.join(d, "t.jsonl")
+        line = lambda i, out: json.dumps({"type": "assistant", "sessionId": "s", "message": {  # noqa: E731
+            "id": i, "model": "m1", "usage": {"input_tokens": 5, "output_tokens": out, "cache_read_input_tokens": 100},
+            "content": [{"type": "tool_use", "name": "Read"}]}}) + "\n"
+        with open(tp, "w", encoding="utf-8") as fh:
+            fh.write(line("a", 1) + line("a", 9) + line("b", 3))
+        for _ in (1, 2):  # second Stop must not re-ingest
+            self.run_hook({"hook_event_name": "Stop", "session_id": "s", "transcript_path": tp}, d)
+        u = self.rows(d, "usage")
+        self.assertEqual(sorted(x["msg_id"] for x in u), ["a", "b"])
+        self.assertEqual({x["msg_id"]: x["output_tokens"] for x in u}["a"], 9)
+
+
 class KeyStore(unittest.TestCase):
     def test_dpapi_roundtrip_and_binding(self):
         import keystore

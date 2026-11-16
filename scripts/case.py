@@ -17,10 +17,10 @@ usage:
   case.py status CASE                     # compact (~20 line) resume summary
 exit: 0 ok, 1 usage/error, 2 budget exhausted / UNKNOWN
 """
-import argparse, json, os, sys, urllib.error, urllib.request
+import argparse, json, os, sys, time, urllib.error, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ctilib import (CTIError, KEY_ENVS, Lock, get_key, key_source, case_dir, extract, normalize, read_json, utc, write_json)
+from ctilib import (tlog, CTIError, KEY_ENVS, Lock, get_key, key_source, case_dir, extract, normalize, read_json, utc, write_json)
 import ioc_index
 
 PHASES = ["INIT", "NORMALIZE", "PROBE", "DISPATCH", "INGEST", "TRIAGE_PIVOTS", "ENRICH", "VALIDATE", "REPORT", "DONE"]
@@ -93,12 +93,18 @@ def cmd_init(a):
 
 def _get(url, headers=None, method="GET", timeout=20):
     req = urllib.request.Request(url, headers={"User-Agent": "cti-investigation", **(headers or {})}, method=method)
+    t0, host = time.time(), urllib.parse.urlsplit(url).hostname
+    net = dict(service="probe", method=method, host=host)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, r.read(200_000)
+            body = r.read(200_000)
+            tlog("network", **net, status=r.status, bytes=len(body), ms=int((time.time() - t0) * 1000))
+            return r.status, body
     except urllib.error.HTTPError as e:
+        tlog("network", **net, status=e.code, ms=int((time.time() - t0) * 1000), error="HTTPError")
         return e.code, e.read(2000)
     except Exception as e:  # network blocked, DNS, timeout
+        tlog("network", **net, status=None, ms=int((time.time() - t0) * 1000), error=type(e).__name__)
         return None, str(e).encode()
 
 

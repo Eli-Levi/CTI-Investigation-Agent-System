@@ -34,6 +34,15 @@ def allowed(host):
 
 
 def out(decision, reason):
+    try:  # telemetry: record the decision (reason only; never the command) - best effort
+        import datetime
+        d = os.environ.get("CTI_LOG_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "guard.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"),
+                                 "decision": decision, "reason": re.sub(r"[A-Za-z0-9_\-]{32,}", "<masked>", reason)[:200]}) + "\n")
+    except Exception:
+        pass
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
                                              "permissionDecisionReason": reason}}))
     sys.exit(0)

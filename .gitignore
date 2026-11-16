@@ -6,4 +6,5 @@ __pycache__/
 *.lock
 .claude/settings.local.json
 Investigation Records/
+logs/
 .venv
