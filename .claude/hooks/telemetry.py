@@ -7,6 +7,7 @@ always exit 0, all errors swallowed. Output goes to logs/ (gitignored; override 
 
   logs/tools.jsonl    one line per tool call (ok/fail, duration, result size, privacy-safe input summary)
   logs/events.jsonl   session/subagent/prompt lifecycle (prompt TEXT is never stored, only its length)
+  logs/sessions.jsonl session id -> title (the title Claude Code already keeps in the transcript; custom > ai)
   logs/usage.jsonl    one line per model API call, parsed from the transcript (tokens, model, tools used)
   logs/errors.jsonl   API errors seen in transcripts
   logs/guard.jsonl    passive_guard decisions (ask/deny) - written by passive_guard.py
@@ -25,6 +26,14 @@ URL_HOST = re.compile(r"(?i)\b(?:https?|hxxps?|ftp)://([^/\s'\"`<>:?#]+)")
 SCRIPT = re.compile(r"(?i)python[3w]?(?:\.exe)?\s+(?:\S*[\\/])?scripts[\\/]([\w.]+)\.py\s*(.*)")
 
 
+CASE_ID = re.compile(r"\b([A-Za-z]{2,5}-\d{8}-[\w-]+)\b")  # e.g. SMS-20261116-help4kids
+
+
+def case_of(text):
+    m = CASE_ID.search(text or "")
+    return m.group(1) if m else None
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
 
@@ -40,8 +49,16 @@ def scrub(s, n=300):
 
 
 def summarize_input(tool, ti):
-    """Privacy-safe description of what the call did."""
+    """Privacy-safe description of what the call did (+ the case id it touched, if any)."""
     ti = ti if isinstance(ti, dict) else {}
+    out = _summarize(tool, ti)
+    c = case_of(ti.get("command") or ti.get("file_path") or ti.get("notebook_path") or "")
+    if c:
+        out["case"] = c
+    return out
+
+
+def _summarize(tool, ti):
     if tool in ("Bash", "PowerShell"):
         cmd = ti.get("command", "")
         m = SCRIPT.search(cmd)
@@ -78,6 +95,72 @@ def resp_size(r):
         return None
 
 
+def title_of(o):
+    """(kind, text) if this transcript line is a session-title record. A user rename (custom) beats the auto title."""
+    t = o.get("type")
+    if t == "custom-title" and o.get("customTitle"):
+        return "custom", scrub(o["customTitle"], 120)
+    if t == "ai-title" and o.get("aiTitle"):
+        return "ai", scrub(o["aiTitle"], 120)
+    return None
+
+
+def write_title(cur, sid, found):
+    """found: {'custom': text?, 'ai': text?} -> sessions.jsonl row if the effective title changed."""
+    if not sid or not found:
+        return
+    kind = "custom" if "custom" in found else "ai"
+    key = "title:" + sid
+    if cur.get(key) == [kind, found[kind]]:
+        return
+    cur[key] = [kind, found[kind]]
+    write("sessions", {"session": sid, "title": found[kind], "kind": kind})
+
+
+def backfill_titles(projects_dir=None):
+    """One-off: titles for sessions already in events.jsonl, scanned from their full transcripts."""
+    sids = set()
+    p = os.path.join(LOG_DIR, "events.jsonl")
+    if os.path.isfile(p):
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    s = json.loads(line).get("session")
+                except ValueError:
+                    continue
+                if s:
+                    sids.add(s)
+    base = projects_dir or os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    cur_path, n = os.path.join(LOG_DIR, ".cursors.json"), 0
+    try:
+        with open(cur_path, encoding="utf-8") as fh:
+            cur = json.load(fh)
+    except Exception:
+        cur = {}
+    for sid in sorted(sids):
+        hits = glob.glob(os.path.join(base, "*", sid + ".jsonl")) + glob.glob(os.path.join(base, sid + ".jsonl"))
+        if not hits:
+            continue
+        found = {}
+        with open(hits[0], encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '-title"' not in line:
+                    continue
+                try:
+                    t = title_of(json.loads(line))
+                except ValueError:
+                    continue
+                if t:
+                    found[t[0]] = t[1]
+        before = cur.get("title:" + sid)
+        write_title(cur, sid, found)
+        n += cur.get("title:" + sid) != before
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with open(cur_path, "w", encoding="utf-8") as fh:
+        json.dump(cur, fh)
+    print(f"backfill: {len(sids)} sessions seen in events.jsonl, {n} titles written")
+
+
 def ingest_transcript(path, label):
     """Append new per-API-call usage rows from a transcript JSONL (byte-offset cursor, idempotent enough:
     log_report.py dedupes by message id)."""
@@ -99,11 +182,16 @@ def ingest_transcript(path, label):
     if end < 0:
         return
     chunk = chunk[:end + 1]
-    best = {}
+    best, titles, tsid = {}, {}, None
     for raw in chunk.splitlines():
         try:
             o = json.loads(raw)
         except Exception:
+            continue
+        t = title_of(o)
+        if t:
+            titles[t[0]] = t[1]
+            tsid = o.get("sessionId") or tsid
             continue
         if o.get("isApiErrorMessage") or o.get("subtype") == "api_error" or o.get("type") == "api_error":
             msg = o.get("message", {})
@@ -131,6 +219,11 @@ def ingest_transcript(path, label):
             rec["server_tools"] = {k: v for k, v in st.items() if v}
     for rec in best.values():
         write("usage", rec)
+    if label == "main" and titles:  # session description: title Claude Code already stores; never prompt text
+        prev = cur.get("title:" + (tsid or ""), [None, None])
+        if "custom" not in titles and prev[0] == "custom":
+            titles["custom"] = prev[1]  # keep an earlier user rename over a newer auto title
+        write_title(cur, tsid or os.path.basename(path)[:-6], titles)
     cur[path] = off + len(chunk)
     os.makedirs(LOG_DIR, exist_ok=True)
     with open(cur_path, "w", encoding="utf-8") as fh:
@@ -180,6 +273,10 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--backfill-titles" in sys.argv:  # manual one-off: python .claude/hooks/telemetry.py --backfill-titles [--projects-dir DIR]
+        pd = sys.argv[sys.argv.index("--projects-dir") + 1] if "--projects-dir" in sys.argv else None
+        backfill_titles(pd)
+        sys.exit(0)
     try:
         main()
     except Exception:

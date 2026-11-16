@@ -1,0 +1,35 @@
+# Grafana + log API. Start: docker compose -f monitoring/docker-compose.yml up -d   ->  http://localhost:3000
+# The API container mounts ../logs READ-ONLY; every Grafana panel refresh re-reads the logs through it.
+services:
+  log-api:
+    image: python:3.12-slim
+    command: ["python", "/app/log_api.py", "--host", "0.0.0.0", "--port", "8765", "--log-dir", "/logs"]
+    volumes:
+      - ./log_api.py:/app/log_api.py:ro
+      - ${LOG_DIR:-../logs}:/logs:ro
+    ports:
+      - "127.0.0.1:8765:8765"   # optional: lets you curl the API from the host
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:11.3.0
+    depends_on: [log-api]
+    environment:
+      # Pinned: Infinity 4.x needs Grafana >= 11.6 (else "react/jsx-runtime 404"); 3.7.1 supports >= 10.4.8.
+      # If you bump the Grafana image to >= 11.6.11 / 12.x you may use a newer plugin.
+      GF_INSTALL_PLUGINS: yesoreyeram-infinity-datasource 3.7.1
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/claude-code-ops.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
+volumes:
+  grafana-data:

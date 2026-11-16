@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch|Bash|PowerShell|Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\passive_guard.py\"",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 10 }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 10 }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 10 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 10 }] }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 10 }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 15 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 15 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "shell": "powershell", "command": "python \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\telemetry.py\"", "timeout": 15 }] }]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/*)",
+      "PowerShell(python scripts/*)",
+      "WebFetch(domain:urlscan.io)",
+      "WebFetch(domain:www.virustotal.com)",
+      "WebFetch(domain:wheregoes.com)",
+      "WebFetch(domain:crt.sh)",
+      "WebFetch(domain:rdap.org)",
+      "WebFetch(domain:web.archive.org)"
+    ]
+  }
+}

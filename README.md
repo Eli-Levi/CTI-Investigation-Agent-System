@@ -15,6 +15,7 @@ Give it a suspicious message or link. It investigates through third-party intel 
 - **Cross-case IOC gateway**: a derived graph links cases through strong indicators only, with tiered, user-gated access. Cases are never auto-merged.
 - **Hebrew-first outputs**: inputs are often Hebrew, and the Hebrew report is mandatory alongside the English one.
 - **Obsidian knowledge base**: every case is a folder in an Obsidian vault, and a graph view links cases through shared indicators (see below).
+- **Usage telemetry and Grafana dashboard**: privacy-safe logs of token usage, tool calls, failures and outbound calls, with a terminal report and an optional dashboard (see below).
 
 ## How it works
 
@@ -76,19 +77,57 @@ What the graph is and is not:
 - A link is an `INFERRED` lead, never attribution. Cases are not merged automatically, and you confirm ties yourself under the card's **Links** section.
 - The vault is gitignored, so the graph exists locally and is not published with the repo.
 
+## Telemetry and monitoring
+
+The project records how Claude Code is used while it works cases, so you can analyse token spend, tool failures and where calls go. This is separate from the investigation logic: it never touches case evidence.
+
+**Logs** are append-only JSONL files in `logs/` (gitignored; override the folder with `CTI_LOG_DIR`):
+
+| File | Contents | Written by |
+|---|---|---|
+| `usage.jsonl` | One row per model API call: model, input/output/cache tokens, stop reason, tools requested. Subagent calls are tagged. | `telemetry.py`, parsed from the session transcript |
+| `tools.jsonl` | One row per tool call: ok/fail, duration, result size, a privacy-safe input summary. | `telemetry.py` |
+| `errors.jsonl` | Tool failures and API errors (truncated, token-like strings masked). | `telemetry.py` |
+| `network.jsonl` | Every outbound HTTP call made by `scripts/`: service, host, status, retry attempt, latency, bytes. | `ctilib.tlog` (from `intel.py`, `case.py`) |
+| `guard.jsonl` | `passive_guard` `ask`/`deny` decisions. | `passive_guard.py` |
+| `events.jsonl` | Session, subagent and prompt events (prompt length only). | `telemetry.py` |
+| `sessions.jsonl` | Session ID to title. The title is the one Claude Code already stores in the session transcript (a title you set yourself wins over the auto-generated one). | `telemetry.py` |
+
+**Session IDs:** every row in `tools`, `usage`, `errors`, `events` and `sessions` carries the `session` field (the Claude Code session ID, also the transcript's filename). `network.jsonl` and `guard.jsonl` have none, because the scripts never see it, so they are matched to a session by its time window. List sessions with `python scripts/log_report.py --sessions` (ID, start, title, cases touched, call counts), then narrow any report with `--session <id or unique prefix>`. The "cases touched" come from case IDs seen in tool calls (script arguments and case file paths). Sessions that predate the title logging can be filled in once with `python .claude/hooks/telemetry.py --backfill-titles`.
+
+Privacy rules: logs never contain full commands, URLs or query strings, prompt text, or key values. Only script name plus subcommand, hosts, sizes and timings are stored. Telemetry never blocks a tool call (it always exits 0 and swallows its own errors). Model API calls themselves cannot be hooked, so tokens and model come from transcripts and the API host from `ANTHROPIC_BASE_URL`.
+
+**Terminal report:**
+
+```powershell
+python scripts/log_report.py [--since 2026-11-16] [--session ID]
+```
+
+Prints tokens by model and source with cache hit rate, per-tool frequency, failure rate, latency and result size, the most-run scripts, frequent errors, network destinations and guard decisions.
+
+**Grafana dashboard** (`monitoring/`, standalone, nothing imported from the CTI code): a small read-only HTTP API re-reads the logs on every panel refresh and serves them to Grafana.
+
+```powershell
+docker compose -f monitoring/docker-compose.yml up -d    # then open http://localhost:3000
+```
+
+The datasource and the "Claude Code - usage & tool ops" dashboard are provisioned automatically. A **Sessions** table lists each session with its ID, start and last-seen time, title, cases touched, models and call counts; click an ID to filter the whole dashboard to that session (clear the "Session" box at the top to reset). The first start needs internet to install the Infinity plugin, which is pinned to 3.7.1 to match the Grafana 11.3.0 image. See [`monitoring/README.md`](monitoring/README.md) for panels, API endpoints and troubleshooting.
+
 ## Repository layout
 
 ```
 .claude/
   agents/            cti-web-chain, cti-infra subagent definitions
-  hooks/             passive_guard.py (PreToolUse guard)
+  hooks/             passive_guard.py (PreToolUse guard), telemetry.py (usage/tool logging)
   skills/            cti-investigate orchestrator + on-demand reference docs
   settings.json      hook registration + permission allowlist
 scripts/             case, intel, evidence_ingest, evidence_doc, cti_diagram,
-                     cert_pivot, ioc_index, keystore, ctilib (stdlib only)
+                     cert_pivot, ioc_index, keystore, ctilib, log_report (stdlib only)
+monitoring/          standalone Grafana dashboard + log API (docker compose)
 shared/core-policy.md  binding scope / safety / evidence policy for all agents
 setup/settings.example.json  template for .claude/settings.json
 tests/test_offline.py        offline test suite (no network)
+logs/                        telemetry JSONL (gitignored)
 Investigation Records/       Obsidian vault, one folder per case (gitignored)
 ```
 
@@ -134,10 +173,11 @@ python scripts/case.py reopen <CASE> --why "..."  # resume a closed case
 ## Testing
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -v              # hook, scripts, IOC index, telemetry
+python -m unittest discover -s monitoring/tests -v   # monitoring log API
 ```
 
-The suite runs offline and covers the hook, scripts and the IOC index.
+The suites run offline. Tests write telemetry to a temporary folder, never to the real `logs/`.
 
 ## Privacy and safety
 

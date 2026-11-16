@@ -1,0 +1,12 @@
+apiVersion: 1
+datasources:
+  - name: Claude Logs API
+    uid: logs-api
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    url: http://log-api:8765
+    isDefault: true
+    jsonData:
+      auth_method: none
+      allowedHosts:
+        - http://log-api:8765

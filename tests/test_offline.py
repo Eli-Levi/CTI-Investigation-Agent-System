@@ -78,6 +78,26 @@ class Telemetry(unittest.TestCase):
         self.assertNotIn("A" * 40, blob)
         self.assertEqual(len(self.rows(d, "errors")), 1)
 
+    def test_case_id_and_session_title_logged_without_prompt_text(self):
+        d = tempfile.mkdtemp()
+        self.run_hook({"hook_event_name": "PostToolUse", "session_id": "s", "tool_name": "PowerShell",
+                       "tool_input": {"command": "python scripts/case.py status SMS-20261116-help4kids"},
+                       "tool_response": "ok"}, d)
+        self.assertEqual(self.rows(d, "tools")[0]["in"]["case"], "SMS-20261116-help4kids")
+        tp = os.path.join(d, "t.jsonl")
+        with open(tp, "w", encoding="utf-8") as fh:
+            for o in ({"type": "ai-title", "sessionId": "s", "aiTitle": "Auto title"},
+                      {"type": "custom-title", "sessionId": "s", "customTitle": "My title"},
+                      {"type": "user", "sessionId": "s", "message": {"content": "SECRET PROMPT TEXT http://evil.top"}}):
+                fh.write(json.dumps(o) + "\n")
+        for _ in (1, 2):  # unchanged title must not be re-written
+            self.run_hook({"hook_event_name": "Stop", "session_id": "s", "transcript_path": tp}, d)
+        s = self.rows(d, "sessions")
+        self.assertEqual([(x["session"], x["title"], x["kind"]) for x in s], [("s", "My title", "custom")])
+        blob = json.dumps([self.rows(d, st) for st in ("tools", "usage", "events", "errors", "sessions")])
+        self.assertNotIn("SECRET PROMPT", blob)
+        self.assertNotIn("evil.top", blob)
+
     def test_transcript_usage_ingested_and_idempotent(self):
         d = tempfile.mkdtemp()
         tp = os.path.join(d, "t.jsonl")
